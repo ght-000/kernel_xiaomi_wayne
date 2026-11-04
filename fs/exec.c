@@ -1670,13 +1670,32 @@ out_ret:
 	return retval;
 }
 
+#ifdef CONFIG_KSU_MANUAL_HOOK
+__attribute__((hot))
+extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
+        void *argv, void *envp, int *flags);
+__attribute__((hot))
+extern int ksu_handle_post_execveat(int *fd, struct filename **filename_ptr,
+        void *argv, void *envp, int *flags, int *retval);
+#endif
+
 int do_execve(struct filename *filename,
 	const char __user *const __user *__argv,
 	const char __user *const __user *__envp)
 {
 	struct user_arg_ptr argv = { .ptr.native = __argv };
 	struct user_arg_ptr envp = { .ptr.native = __envp };
+#ifdef CONFIG_KSU_MANUAL_HOOK
+	int retval;
+	int fd = AT_FDCWD;
+	int flags = 0;
+	ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+	retval = do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
+	return retval;
+#else
 	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+#endif
 }
 
 int do_execveat(int fd, struct filename *filename,
@@ -1686,8 +1705,15 @@ int do_execveat(int fd, struct filename *filename,
 {
 	struct user_arg_ptr argv = { .ptr.native = __argv };
 	struct user_arg_ptr envp = { .ptr.native = __envp };
-
+#ifdef CONFIG_KSU_MANUAL_HOOK
+	int retval;
+	ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+	retval = do_execveat_common(fd, filename, argv, envp, flags);
+	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
+	return retval;
+#else
 	return do_execveat_common(fd, filename, argv, envp, flags);
+#endif
 }
 
 #ifdef CONFIG_COMPAT
@@ -1703,7 +1729,17 @@ static int compat_do_execve(struct filename *filename,
 		.is_compat = true,
 		.ptr.compat = __envp,
 	};
+#ifdef CONFIG_KSU_MANUAL_HOOK
+	int retval;
+	int fd = AT_FDCWD;
+	int flags = 0;
+	ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+	retval = do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
+	return retval;
+#else
 	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+#endif
 }
 
 static int compat_do_execveat(int fd, struct filename *filename,
@@ -1719,7 +1755,15 @@ static int compat_do_execveat(int fd, struct filename *filename,
 		.is_compat = true,
 		.ptr.compat = __envp,
 	};
+#ifdef CONFIG_KSU_MANUAL_HOOK
+	int retval;
+	ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+	retval = do_execveat_common(fd, filename, argv, envp, flags);
+	ksu_handle_post_execveat(&fd, &filename, &argv, &envp, &flags, &retval);
+	return retval;
+#else
 	return do_execveat_common(fd, filename, argv, envp, flags);
+#endif
 }
 #endif
 
