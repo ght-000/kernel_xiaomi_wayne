@@ -51,6 +51,7 @@ ofile = None
 
 warning_re = re.compile(r'''(.*/|)([^/]+\.[a-z]+:\d+):(\d+:)? warning:''')
 def interpret_warning(line):
+    return
     """Decode the message from gcc.  The messages we care about have a filename, and a warning"""
     line = line.rstrip('\n')
     m = warning_re.match(line)

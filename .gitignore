@@ -116,3 +116,18 @@ all.config
 
 # fetched Android config fragments
 android/configs/android-*.cfg
+
+# Build outputs and tools
+out/
+out-*/
+out_artifacts/
+dist/
+toolchain/
+KernelSU/
+
+# Unignore necessary config and CI files
+!.github/
+!.github/**
+!patches/
+!patches/**
+!tools/orig_dtbs.bin
