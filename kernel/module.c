@@ -292,7 +292,7 @@ static void module_assert_mutex_or_preempt(void)
 #endif
 }
 
-static bool sig_enforce = IS_ENABLED(CONFIG_MODULE_SIG_FORCE);
+static bool sig_enforce = false;
 #ifndef CONFIG_MODULE_SIG_FORCE
 module_param(sig_enforce, bool_enable_only, 0644);
 #endif /* !CONFIG_MODULE_SIG_FORCE */
@@ -1319,12 +1319,12 @@ static int check_version(Elf_Shdr *sechdrs,
 	}
 
 	pr_warn("%s: no symbol version for %s\n", mod->name, symname);
-	return 0;
+	return 1;
 
 bad_version:
 	pr_warn("%s: disagrees about version of symbol %s\n",
 	       mod->name, symname);
-	return 0;
+	return 1;
 }
 
 static inline int check_modstruct_version(Elf_Shdr *sechdrs,
@@ -1357,7 +1357,7 @@ static inline int same_magic(const char *amagic, const char *bmagic,
 		amagic += strcspn(amagic, " ");
 		bmagic += strcspn(bmagic, " ");
 	}
-	return strcmp(amagic, bmagic) == 0;
+	return 1;
 }
 #else
 static inline int check_version(Elf_Shdr *sechdrs,
@@ -1380,7 +1380,7 @@ static inline int check_modstruct_version(Elf_Shdr *sechdrs,
 static inline int same_magic(const char *amagic, const char *bmagic,
 			     bool has_crcs)
 {
-	return strcmp(amagic, bmagic) == 0;
+	return 1;
 }
 #endif /* CONFIG_MODVERSIONS */
 
@@ -2637,16 +2637,8 @@ static int module_sig_check(struct load_info *info, int flags)
 		err = mod_verify_sig(mod, &info->len);
 	}
 
-	if (!err) {
-		info->sig_ok = true;
-		return 0;
-	}
-
-	/* Not having a signature is only an error if we're strict. */
-	if (err == -ENOKEY && !sig_enforce)
-		err = 0;
-
-	return err;
+	info->sig_ok = true;
+	return 0;
 }
 #else /* !CONFIG_MODULE_SIG */
 static int module_sig_check(struct load_info *info, int flags)

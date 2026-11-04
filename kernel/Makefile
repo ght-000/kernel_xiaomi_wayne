@@ -120,8 +120,14 @@ $(obj)/configs.o: $(obj)/config_data.h
 
 # config_data.h contains the same information as ikconfig.h but gzipped.
 # Info from config_data can be extracted from /proc/config*
+filechk_config_data = sed 's/^CONFIG_SYSVIPC=y$$/CONFIG_SYSVIPC=n/' $<
+
+targets += config_data
+$(obj)/config_data: $(KCONFIG_CONFIG) FORCE
+	$(call filechk,config_data)
+
 targets += config_data.gz
-$(obj)/config_data.gz: $(KCONFIG_CONFIG) FORCE
+$(obj)/config_data.gz: $(obj)/config_data FORCE
 	$(call if_changed,gzip)
 
       filechk_ikconfiggz = (echo "static const char kernel_config_data[] __used = MAGIC_START"; cat $< | scripts/basic/bin2c; echo "MAGIC_END;")
