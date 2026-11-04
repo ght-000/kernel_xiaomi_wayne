@@ -1,0 +1,153 @@
+name: Build Xiaomi 6X (wayne) Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      bakasu_version:
+        description: 'BakaSU version (tag, branch, or commit)'
+        required: false
+        default: ''
+      enable_bakasu:
+        description: 'Enable BakaSU'
+        required: false
+        type: boolean
+        default: true
+      enable_droidspaces:
+        description: 'Enable Droidspaces'
+        required: false
+        type: boolean
+        default: true
+      create_release:
+        description: 'Publish release'
+        required: false
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+      - tulip-p-oss
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+
+jobs:
+  build:
+    name: Build Kernel
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libncurses5 libncurses-dev \
+            zip openjdk-11-jre-headless abootimg curl wget git python2 python3
+          if [ ! -f /usr/bin/python ]; then
+            sudo ln -sf /usr/bin/python2 /usr/bin/python
+          fi
+
+      - name: Setup toolchain
+        run: |
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git toolchain
+          echo "$GITHUB_WORKSPACE/toolchain/bin" >> $GITHUB_PATH
+
+      - name: Configure
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-android-
+
+          ENABLE_BAKASU="${{ github.event.inputs.enable_bakasu || 'true' }}"
+          ENABLE_DROIDSPACES="${{ github.event.inputs.enable_droidspaces || 'true' }}"
+          BAKASU_VER="${{ github.event.inputs.bakasu_version || '' }}"
+
+          echo "ENABLE_BAKASU=$ENABLE_BAKASU" >> $GITHUB_ENV
+          echo "ENABLE_DROIDSPACES=$ENABLE_DROIDSPACES" >> $GITHUB_ENV
+
+          SUFFIX="wayne"
+          if [ "$ENABLE_BAKASU" = "true" ]; then
+            SUFFIX="${SUFFIX}-bakasu"
+          fi
+          if [ "$ENABLE_DROIDSPACES" = "true" ]; then
+            SUFFIX="${SUFFIX}-droidspaces"
+          fi
+          echo "BUILD_SUFFIX=$SUFFIX" >> $GITHUB_ENV
+
+          if [ "$ENABLE_BAKASU" = "true" ]; then
+            git clone https://github.com/Baka-SU/BakaSU.git KernelSU
+            if [ -n "$BAKASU_VER" ]; then
+              git -C KernelSU checkout "$BAKASU_VER"
+            fi
+
+            KSU_COMMIT_COUNT=$(git -C KernelSU rev-list --count HEAD)
+            KSU_VERSION=$((30700 + KSU_COMMIT_COUNT))
+            echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+
+            if [ -f "patches/0001-adb_root-android9-compat.patch" ]; then
+              git -C KernelSU apply ../patches/0001-adb_root-android9-compat.patch || true
+            fi
+            rm -rf drivers/kernelsu
+            ln -sf ../KernelSU/kernel drivers/kernelsu
+          fi
+
+          make wayne-perf_defconfig
+
+          if [ "$ENABLE_DROIDSPACES" = "true" ]; then
+            cat arch/arm64/configs/droidspaces.config >> .config
+            make olddefconfig
+          fi
+
+          if [ "$ENABLE_BAKASU" = "true" ]; then
+            cat arch/arm64/configs/bakasu.config >> .config
+            make olddefconfig
+          else
+            sed -i '/CONFIG_KSU/d' .config
+            echo "# CONFIG_KSU is not set" >> .config
+            make olddefconfig
+          fi
+
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-android-
+
+          make -j1 scripts prepare headers_install INSTALL_HDR_PATH="$(pwd)/usr"
+          make -j$(nproc) Image.gz
+          cat arch/arm64/boot/Image.gz tools/orig_dtbs.bin > arch/arm64/boot/Image.gz-dtb
+
+      - name: Fetch manager
+        if: ${{ env.ENABLE_BAKASU == 'true' }}
+        run: |
+          python3 tools/fetch_bakasu_manager.py dist "${KSU_VERSION}"
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          chmod +x tools/pack_ak3.sh tools/pack_signed_boot.sh
+          tools/pack_ak3.sh arch/arm64/boot/Image.gz-dtb "dist/AnyKernel3-${BUILD_SUFFIX}.zip"
+          tools/pack_signed_boot.sh arch/arm64/boot/Image.gz-dtb "dist/boot.img"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ env.BUILD_SUFFIX }}
+          path: dist/*
+          retention-days: 14
+
+      - name: Release
+        if: ${{ github.event.inputs.create_release != 'false' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ github.run_number }}-${{ env.BUILD_SUFFIX }}"
+          tag_name: "v${{ github.run_number }}-${{ env.BUILD_SUFFIX }}"
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
