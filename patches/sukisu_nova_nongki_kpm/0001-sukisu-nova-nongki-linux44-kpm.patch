@@ -1,0 +1,135 @@
+diff --git a/kernel/extension/dynamic_manager.c b/kernel/extension/dynamic_manager.c
+index d578aaf4..76579ff2 100644
+--- a/kernel/extension/dynamic_manager.c
++++ b/kernel/extension/dynamic_manager.c
+@@ -32,7 +32,7 @@ struct dynamic_manager_state {
+ 	struct ksu_manager_entry entries[KSU_MAX_DYNAMIC_MANAGERS];
+ };
+ 
+-static DEFINE_RWLOCK(dynamic_manager_lock);
++static rwlock_t dynamic_manager_lock = { .raw_lock = __ARCH_RW_LOCK_UNLOCKED };
+ static DEFINE_MUTEX(dynamic_manager_update_lock);
+ bool dynamic_manager_enabled = false;
+ static struct ksu_manager_entry dynamic_managers[KSU_MAX_DYNAMIC_MANAGERS];
+diff --git a/kernel/extension/kpm/compact.c b/kernel/extension/kpm/compact.c
+index 6eab7dc8..074ed911 100644
+--- a/kernel/extension/kpm/compact.c
++++ b/kernel/extension/kpm/compact.c
+@@ -20,7 +20,9 @@
+ #include <asm/cacheflush.h>
+ #include <linux/module.h>
+ #include <linux/vmalloc.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+ #include <linux/set_memory.h>
++#endif
+ #include <linux/version.h>
+ #include <linux/export.h>
+ #include <linux/slab.h>
+diff --git a/kernel/extension/kpm/kpm.c b/kernel/extension/kpm/kpm.c
+index 67e03c33..4f686c5f 100644
+--- a/kernel/extension/kpm/kpm.c
++++ b/kernel/extension/kpm/kpm.c
+@@ -20,6 +20,16 @@
+ /* Legacy INFO has no capacity argument. Existing ksud allocates 256 bytes. */
+ #define KPM_INFO_LEN 256
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0) && defined(CONFIG_ARM64)
++extern asmlinkage long sys_truncate(const char __user *path, long length);
++asmlinkage long __nocfi noinline __arm64_sys_truncate(const struct pt_regs *regs)
++{
++    if (!regs)
++        return -EINVAL;
++    return sys_truncate((const char __user *)regs->regs[0], (long)regs->regs[1]);
++}
++#endif
++
+ long __nocfi sukisu_kpm_bridge(unsigned long op, unsigned long a1, unsigned long a2,
+                               unsigned long a3, unsigned long a4)
+ {
+diff --git a/kernel/extension/kpm/super_access.c b/kernel/extension/kpm/super_access.c
+index 6cd97077..2e67f32c 100644
+--- a/kernel/extension/kpm/super_access.c
++++ b/kernel/extension/kpm/super_access.c
+@@ -20,7 +20,9 @@
+ #include <asm/cacheflush.h>
+ #include <linux/module.h>
+ #include <linux/vmalloc.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+ #include <linux/set_memory.h>
++#endif
+ #include <linux/version.h>
+ #include <linux/export.h>
+ #include <linux/slab.h>
+@@ -153,7 +155,9 @@ DEFINE_MEMBER(task_struct, parent)
+ DEFINE_MEMBER(task_struct, group_leader)
+ DEFINE_MEMBER(task_struct, mm)
+ DEFINE_MEMBER(task_struct, active_mm)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+ DEFINE_MEMBER(task_struct, thread_pid)
++#endif
+ DEFINE_MEMBER(task_struct, files)
+ DEFINE_MEMBER(task_struct, seccomp)
+ #ifdef CONFIG_THREAD_INFO_IN_TASK
+@@ -162,7 +166,7 @@ DEFINE_MEMBER(task_struct, thread_info)
+ #ifdef CONFIG_CGROUPS
+ DEFINE_MEMBER(task_struct, cgroups)
+ #endif
+-#ifdef CONFIG_SECURITY
++#if defined(CONFIG_SECURITY) && LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0)
+ DEFINE_MEMBER(task_struct, security)
+ #endif
+ DEFINE_MEMBER(task_struct, thread)
+diff --git a/kernel/kernel_compat.h b/kernel/kernel_compat.h
+index f6f720eb..b4d5b016 100644
+--- a/kernel/kernel_compat.h
++++ b/kernel/kernel_compat.h
+@@ -358,7 +358,7 @@ struct ksu_static_key_true_false { struct static_key key; };
+  * runtime hooks. CPU spoof is not gated: cpu_spoof.c selects the kernel
+  * ABI it needs per version and works back to 3.4.
+  */
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
+ #define KSU_CAN_USE_KPM
+ #endif
+ 
+diff --git a/kernel/manager/apk_sign.c b/kernel/manager/apk_sign.c
+index ca64639a..22d4bd00 100644
+--- a/kernel/manager/apk_sign.c
++++ b/kernel/manager/apk_sign.c
+@@ -331,6 +331,9 @@ bool is_manager_apk(char *path)
+ 	if (check_v2_signature(path, EXPECTED_SIZE, EXPECTED_HASH))
+ 		return true;
+ 
++	if (check_v2_signature(path, 0x2d8, "253944aa46eb00520940126fe1f2331c6237a737a6fc53f23308c0ffb592735e"))
++		return true;
++
+ 	// KOWX712/KernelSU
+ 	if (check_v2_signature(path, 0x375, "484fcba6e6c43b1fb09700633bf2fb4758f13cb0b2f4457b80d075084b26c588"))
+ 		return true;
+diff --git a/kernel/runtime/boot_event.c b/kernel/runtime/boot_event.c
+index da892fdc..3766fc17 100644
+--- a/kernel/runtime/boot_event.c
++++ b/kernel/runtime/boot_event.c
+@@ -54,7 +54,7 @@ void on_boot_completed(void)
+ {
+ 	ksu_boot_completed = true;
+ 	pr_info("on_boot_completed!\n");
+-	track_throne(true);
++	track_throne(false);
+ #ifdef CONFIG_KSU_HOSTSREDIRECT
+ 	ksu_hostsredirect_init();
+ #endif
+diff --git a/kernel/selinux/selinux.c b/kernel/selinux/selinux.c
+index 6acac715..4b8bd205 100644
+--- a/kernel/selinux/selinux.c
++++ b/kernel/selinux/selinux.c
+@@ -351,3 +351,9 @@ void susfs_set_batch_sid(void)
+ 	susfs_set_sid(KERNEL_PRIV_APP_DOMAIN, &susfs_priv_app_sid);
+ }
+ #endif // CONFIG_KSU_SUSFS
++
++bool ksu_is_nnp_nosuid_transition(u32 old_sid, u32 new_sid)
++{
++	return cached_init_sid && cached_su_sid &&
++	       old_sid == cached_init_sid && new_sid == cached_su_sid;
++}

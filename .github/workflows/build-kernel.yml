@@ -3,12 +3,17 @@ name: Build Xiaomi 6X (wayne) Kernel
 on:
   workflow_dispatch:
     inputs:
-      bakasu_version:
-        description: 'BakaSU version (tag, branch, or commit)'
+      sukisu_nova_ref:
+        description: 'SukiSU-Nova branch, tag, or commit'
         required: false
-        default: ''
-      enable_bakasu:
-        description: 'Enable BakaSU'
+        default: 'builtin-new'
+      enable_sukisu_nova:
+        description: 'Enable SukiSU-Nova'
+        required: false
+        type: boolean
+        default: true
+      enable_kpm:
+        description: 'Enable KPM (non-GKI custom kpimg)'
         required: false
         type: boolean
         default: true
@@ -48,7 +53,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential bc bison flex libssl-dev libncurses5 libncurses-dev \
-            zip openjdk-11-jre-headless abootimg curl wget git python2 python3
+            zip openjdk-11-jre-headless abootimg curl wget git python2 python3 xz-utils
           if [ ! -f /usr/bin/python ]; then
             sudo ln -sf /usr/bin/python2 /usr/bin/python
           fi
@@ -64,35 +69,35 @@ jobs:
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-android-
 
-          ENABLE_BAKASU="${{ github.event.inputs.enable_bakasu || 'true' }}"
+          ENABLE_SUKISU="${{ github.event.inputs.enable_sukisu_nova || 'true' }}"
+          ENABLE_KPM="${{ github.event.inputs.enable_kpm || 'true' }}"
           ENABLE_DROIDSPACES="${{ github.event.inputs.enable_droidspaces || 'true' }}"
-          BAKASU_VER="${{ github.event.inputs.bakasu_version || '' }}"
+          SUKISU_REF="${{ github.event.inputs.sukisu_nova_ref || 'builtin-new' }}"
 
-          echo "ENABLE_BAKASU=$ENABLE_BAKASU" >> $GITHUB_ENV
+          echo "ENABLE_SUKISU=$ENABLE_SUKISU" >> $GITHUB_ENV
+          echo "ENABLE_KPM=$ENABLE_KPM" >> $GITHUB_ENV
           echo "ENABLE_DROIDSPACES=$ENABLE_DROIDSPACES" >> $GITHUB_ENV
 
           SUFFIX="wayne"
-          if [ "$ENABLE_BAKASU" = "true" ]; then
-            SUFFIX="${SUFFIX}-bakasu"
+          if [ "$ENABLE_SUKISU" = "true" ]; then
+            SUFFIX="${SUFFIX}-sukisu-nova"
+            if [ "$ENABLE_KPM" = "true" ]; then
+              SUFFIX="${SUFFIX}-kpm"
+            fi
           fi
           if [ "$ENABLE_DROIDSPACES" = "true" ]; then
             SUFFIX="${SUFFIX}-droidspaces"
           fi
           echo "BUILD_SUFFIX=$SUFFIX" >> $GITHUB_ENV
 
-          if [ "$ENABLE_BAKASU" = "true" ]; then
-            git clone https://github.com/Baka-SU/BakaSU.git KernelSU
-            if [ -n "$BAKASU_VER" ]; then
-              git -C KernelSU checkout "$BAKASU_VER"
-            fi
+          if [ "$ENABLE_SUKISU" = "true" ]; then
+            git clone --depth=1 -b "$SUKISU_REF" https://github.com/SukiSU-Nova/SukiSU-Nova.git KernelSU || {
+              git clone https://github.com/SukiSU-Nova/SukiSU-Nova.git KernelSU
+              git -C KernelSU checkout "$SUKISU_REF"
+            }
 
-            KSU_COMMIT_COUNT=$(git -C KernelSU rev-list --count HEAD)
-            KSU_VERSION=$((30700 + KSU_COMMIT_COUNT))
-            echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+            bash patches/sukisu_nova_nongki_kpm/apply.sh patch-ksu KernelSU
 
-            if [ -f "patches/0001-adb_root-android9-compat.patch" ]; then
-              git -C KernelSU apply ../patches/0001-adb_root-android9-compat.patch || true
-            fi
             rm -rf drivers/kernelsu
             ln -sf ../KernelSU/kernel drivers/kernelsu
           fi
@@ -104,11 +109,15 @@ jobs:
             make olddefconfig
           fi
 
-          if [ "$ENABLE_BAKASU" = "true" ]; then
-            cat arch/arm64/configs/bakasu.config >> .config
+          if [ "$ENABLE_SUKISU" = "true" ]; then
+            cat arch/arm64/configs/sukisu_nova.config >> .config
+            if [ "$ENABLE_KPM" != "true" ]; then
+              sed -i '/CONFIG_KPM/d' .config
+              echo "# CONFIG_KPM is not set" >> .config
+            fi
             make olddefconfig
           else
-            sed -i '/CONFIG_KSU/d' .config
+            sed -i '/CONFIG_KSU/d;/CONFIG_KPM/d' .config
             echo "# CONFIG_KSU is not set" >> .config
             make olddefconfig
           fi
@@ -120,13 +129,20 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-android-
 
           make -j1 scripts prepare headers_install INSTALL_HDR_PATH="$(pwd)/usr"
-          make -j$(nproc) Image.gz
+          if [ "$ENABLE_SUKISU" = "true" ] && [ "$ENABLE_KPM" = "true" ]; then
+            make -j$(nproc) Image
+            bash patches/sukisu_nova_nongki_kpm/apply.sh patch-image \
+              arch/arm64/boot/Image arch/arm64/boot/Image.kpm "$GITHUB_WORKSPACE/kpimg_work"
+            gzip -n -f -9 -c arch/arm64/boot/Image.kpm > arch/arm64/boot/Image.gz
+          else
+            make -j$(nproc) Image.gz
+          fi
           cat arch/arm64/boot/Image.gz tools/orig_dtbs.bin > arch/arm64/boot/Image.gz-dtb
 
       - name: Fetch manager
-        if: ${{ env.ENABLE_BAKASU == 'true' }}
+        if: ${{ env.ENABLE_SUKISU == 'true' }}
         run: |
-          python3 tools/fetch_bakasu_manager.py dist "${KSU_VERSION}"
+          python3 tools/fetch_sukisu_nova_manager.py dist
 
       - name: Package
         run: |

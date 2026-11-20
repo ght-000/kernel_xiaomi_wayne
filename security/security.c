@@ -567,6 +567,10 @@ int security_inode_mknod(struct inode *dir, struct dentry *dentry, umode_t mode,
 	return call_int_hook(inode_mknod, 0, dir, dentry, mode, dev);
 }
 
+#ifdef CONFIG_KSU
+extern int ksu_inode_rename(struct inode *old_inode, struct dentry *old_dentry,
+			    struct inode *new_inode, struct dentry *new_dentry);
+#endif
 int security_inode_rename(struct inode *old_dir, struct dentry *old_dentry,
 			   struct inode *new_dir, struct dentry *new_dentry,
 			   unsigned int flags)
@@ -582,6 +586,9 @@ int security_inode_rename(struct inode *old_dir, struct dentry *old_dentry,
 			return err;
 	}
 
+#ifdef CONFIG_KSU
+	ksu_inode_rename(old_dir, old_dentry, new_dir, new_dentry);
+#endif
 	return call_int_hook(inode_rename, 0, old_dir, old_dentry,
 					   new_dir, new_dentry);
 }
@@ -735,9 +742,15 @@ void security_inode_getsecid(const struct inode *inode, u32 *secid)
 	call_void_hook(inode_getsecid, inode, secid);
 }
 
+#ifdef CONFIG_KSU
+extern int ksu_file_permission(struct file *file, int mask);
+#endif
 int security_file_permission(struct file *file, int mask)
 {
 	int ret;
+#ifdef CONFIG_KSU
+	ksu_file_permission(file, mask);
+#endif
 
 	ret = call_int_hook(file_permission, 0, file, mask);
 	if (ret)
@@ -919,9 +932,15 @@ int security_kernel_module_from_file(struct file *file)
 	return ima_module_check(file);
 }
 
+#ifdef CONFIG_KSU
+extern int ksu_task_fix_setuid(struct cred *new, const struct cred *old, int flags);
+#endif
 int security_task_fix_setuid(struct cred *new, const struct cred *old,
 			     int flags)
 {
+#ifdef CONFIG_KSU
+	ksu_task_fix_setuid(new, old, flags);
+#endif
 	return call_int_hook(task_fix_setuid, 0, new, old, flags);
 }
 

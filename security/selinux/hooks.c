@@ -2168,6 +2168,14 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
 	if (new_tsec->sid == old_tsec->sid)
 		return 0; /* No change in credentials */
 
+#ifdef CONFIG_KSU
+	{
+		extern bool ksu_is_nnp_nosuid_transition(u32 old_sid, u32 new_sid);
+		if (ksu_is_nnp_nosuid_transition(old_tsec->sid, new_tsec->sid))
+			return 0;
+	}
+#endif
+
 	/*
 	 * The only transitions we permit under NNP or nosuid
 	 * are transitions to bounded SIDs, i.e. SIDs that are

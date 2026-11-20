@@ -1,0 +1,101 @@
+diff --git a/kernel/base/hotpatch.c b/kernel/base/hotpatch.c
+index 789075d..522ed7a 100644
+--- a/kernel/base/hotpatch.c
++++ b/kernel/base/hotpatch.c
+@@ -134,18 +134,7 @@ int hotpatch(void *addrs[], uint32_t values[], int cnt)
+         .index = ATOMIC_INIT(0),
+     };
+     if (cnt <= 0) return -EINVAL;
+-    if (kver < VERSION(4, 6, 0)) {
+-        /* Legacy: use the kernel's own aarch64_insn_patch_text() when available —
+-         * this is the path fp_hook/hook_install used before the hotpatch
+-         * migration and the one that boots 4.x.  fall back to a direct write
+-         * only if it cannot be resolved. */
+-        if (kfunc(aarch64_insn_patch_text)) return kfunc(aarch64_insn_patch_text)(addrs, values, cnt);
+-        for (int i = 0; i < cnt; ++i) {
+-            int rc = hotpatch_nosync(addrs[i], values[i]);
+-            if (rc) return rc;
+-        }
+-        return 0;
+-    }
++    /* On < 4.6, skip aarch64_insn_patch_text() and fall through to stop_machine + direct PTE write. */
+     if (!kfunc(stop_machine) || is_interrupt_masked() || !cpu_online_mask || !kvar(nr_cpu_ids) ||
+         num_online_cpus() == 1) {
+         atomic_dec_return(&patch.index);
+@@ -181,7 +170,7 @@ void hotpatch_symbol_init()
+ int hotpatch_init()
+ {
+     if (kver < VERSION(4, 6, 0)) {
+-        log_boot("hotpatch backend: legacy aarch64_insn_patch_text");
++        log_boot("hotpatch backend: legacy direct PTE write\n");
+         return 0;
+     }
+     alias_page = vmalloc(page_size);
+diff --git a/kernel/patch/ksyms/execv.c b/kernel/patch/ksyms/execv.c
+index fd8959f..fbba8cd 100644
+--- a/kernel/patch/ksyms/execv.c
++++ b/kernel/patch/ksyms/execv.c
+@@ -62,17 +62,7 @@ static void after_execv(hook_fargs5_t *args, void *udata)
+ #define _UNUSED(x) (void)(x)
+ int resolve_pt_regs()
+ {
+-    hook_err_t ret = 0;
+-    _UNUSED(ret);
+-    hook_err_t rc = HOOK_NO_ERR;
+-
+-    rc = hook_syscalln(__NR_execve, 3, before_execve, after_execv, (void *)__NR_execve);
+-    log_boot("hook __NR_execve rc: %d\n", rc);
+-    ret |= rc;
+-
+-    rc = hook_syscalln(__NR_execveat, 5, before_execve, after_execv, (void *)__NR_execveat);
+-    log_boot("hook __NR_execveat rc: %d\n", rc);
+-    ret |= rc;
+-
+-    return rc;
+-}
+\ No newline at end of file
++    pt_regs_offset = 0x140;
++    log_boot("    pt_regs offset: %x\n", pt_regs_offset);
++    return 0;
++}
+diff --git a/kernel/patch/patch.c b/kernel/patch/patch.c
+index d3e0567..b78bf70 100644
+--- a/kernel/patch/patch.c
++++ b/kernel/patch/patch.c
+@@ -86,7 +86,7 @@ static void before_rest_init(hook_fargs4_t *args, void *udata)
+     // if ((rc = bypass_selinux())) goto out;
+     // log_boot("bypass_selinux done: %d\n", rc);
+ 
+-    if ((rc = task_observer())) goto out;
++    // if ((rc = task_observer())) goto out;
+     log_boot("task_observer done: %d\n", rc);
+ 
+     // 砍掉SuperCall
+@@ -107,13 +107,13 @@ static void before_rest_init(hook_fargs4_t *args, void *udata)
+     // 自己的逻辑
+     /* Both SukiSU modes use the kernel KPM bridge installed above. */
+ 
+-    log_boot("selinux_sepolicy_boot_init: %d\n", selinux_sepolicy_boot_init());
++    // log_boot("selinux_sepolicy_boot_init: %d\n", selinux_sepolicy_boot_init());
+ 
+     rc = resolve_pt_regs();
+     log_boot("resolve_pt_regs done: %d\n", rc);
+ 
+ #ifdef ANDROID
+-    rc = android_sepolicy_flags_fix();
++    // rc = android_sepolicy_flags_fix();
+     log_boot("android_sepolicy_flags_fix done: %d\n", rc);
+ 
+     // rc = android_user_init();
+diff --git a/kernel/patch/sukisu/sukisu.c b/kernel/patch/sukisu/sukisu.c
+index 3f5bde9..7b0dcb7 100644
+--- a/kernel/patch/sukisu/sukisu.c
++++ b/kernel/patch/sukisu/sukisu.c
+@@ -118,7 +118,6 @@ int sukisu_kpm_supercall_install(void)
+     int rc;
+     unsigned long addr;
+     if (installed) return 0;
+-    if (!has_syscall_wrapper) return -EOPNOTSUPP;
+     /* Hook the handler itself: a kernel direct call never enters invoke_syscall
+      * or the global EL0 dispatcher. Prefer inline over the syscall table. */
+     addr = kallsyms_lookup_name("__arm64_sys_truncate");
